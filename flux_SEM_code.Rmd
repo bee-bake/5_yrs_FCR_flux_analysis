@@ -103,7 +103,7 @@ Let's also load in DO saturated from CTD data. Here, we aggregate DO at continuo
 ```{r}
 #Load the dataset
 #Load in CTD for surface measurements
-CTD_all <- read_csv("https://pasta-s.lternet.edu/package/data/eml/edi/1113/9/bbd126d40b44abaeeb0d734009da9ae4")
+CTD_all <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/200/15/9d741c9cced69cfd609c473ada2812b1")
 
 ```
 
