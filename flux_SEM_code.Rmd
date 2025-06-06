@@ -1,5 +1,5 @@
 ---
-title: "Five years of eddy covariance data and structural equation modeling reveal an important direct role of water temperature and wind, and an indirect role of hypolimnetic dissolved oxygen in controlling methane fluxes from a small reservoir"
+title: "Drivers of methane flux dynamics in a freshwater reservoir with variable dissolved oxygen "
 
 author: "Bibek Kandel"
 date: "`r Sys.Date()`"
