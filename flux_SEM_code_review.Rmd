@@ -1,0 +1,637 @@
+---
+title: "Drivers of methane flux dynamics in a freshwater reservoir with variable dissolved oxygen "
+
+author: "Bibek Kandel"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+#Load libraries
+pacman::p_load(DiagrammeRsvg, rsvg, mvnormalTest, lavaan, lavaanPlot, dplyr, readr, tidyr, lubridate, ggcorrplot, purrr, broom, leaps, piecewiseSEM, gridExtra, htmltools, zoo, tidyverse)
+
+```
+
+
+```{r}
+#Load up the data with methane flux (comp_data.csv created using script_to_create_comp_dataset.R) and associated driver variables
+#This will pull the methane flux daily data which only pass minimum half hourly test of >=20
+comp_data <- read_csv("https://raw.github.com/bee-bake/EddyFlux_data/main/comp_data.csv", show_col_types = FALSE) |> 
+  select(-...1) |>   # Removes the unnecessary first column 
+  mutate(Date = date)
+```
+
+
+
+```{r}
+#Import ghg from EDI and Filter the date and depth needed and convert to fluxes
+#Do you get a different answer if you just extract the date part of the time rather than rounding?
+
+ghg_FCR <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/551/9/98f19e7acae8bea7d127c463b1bb5fbc") |>  
+  mutate(DateTime = as_datetime(DateTime, tz="EST"), 
+         DateTime = date(DateTime)) |>  
+  filter(Reservoir == "FCR", Site == 50, DateTime >= "2020-01-01")
+
+#create a hypsometric table with depth and volume (Hounshell et al. 2022)
+summarized_volumes <- tibble(
+  Depth_m = c(0.1, 1.6, 3.8, 5, 6.2, 8, 9),
+  Volume_L = c(125594861, 101405139, 59900000, 40200000, 13900000, 14100000, 1950000)) #adapted from SI (Hounshell et al. 2020) & bathy_FCR
+
+```
+
+
+
+```{r}
+#PREPARING DISSOLVED GHG DATASET
+#Calculate mean methane from two replicates and filter data from April-November
+## Pivot wider
+ghg_conc <- ghg_FCR |>   
+  select(DateTime,Rep,CH4_umolL,CO2_umolL, Depth_m) |>  
+  summarize(mean_CH4 = mean(CH4_umolL, na.rm = TRUE),
+            mean_CO2 = mean(CO2_umolL, na.rm = TRUE),
+            .by = c("DateTime", "Depth_m"))
+
+
+#only summer (April - November)
+ghg_conc_summer <- ghg_conc |> 
+  filter(DateTime >= "2020-04-01 00:00:00" & DateTime < "2024-11-30 00:00:00") |> 
+  select(DateTime, Depth_m, mean_CH4)
+
+```
+
+
+```{r}
+####ESTIMATE VOLUME WEIGHTED METHANE
+#dissolved methane 
+sub_ghg_conc <- ghg_conc_summer |> 
+  mutate(Date = date(DateTime)) |> 
+  select(Date, mean_CH4, Depth_m)
+
+
+#merge the summarized volumes with dissolved methane data
+Vol_Weighted_CH4 <- left_join(sub_ghg_conc, summarized_volumes, by = "Depth_m") 
+
+
+#Calculate volume-weighted dissolved methane conc
+Vol_Weighted_CH4 <- Vol_Weighted_CH4 |> 
+  mutate(VW_methane = (mean_CH4*Volume_L)/1000000)
+
+#Pivot wider and join with EddyFlux data
+selected_CH4 <- Vol_Weighted_CH4 |> 
+  select(Date, Depth_m, VW_methane) |> 
+  pivot_wider(names_from = Depth_m, values_from = VW_methane, values_fill = NA) |> 
+  rename(CH4_surface = "0.1",
+         CH4_1.6m = "1.6",
+         CH4_3.8m = "3.8",
+         CH4_5m = "5",
+         CH4_6.2m = "6.2",
+         CH4_8m = "8",
+         CH4_9m = "9")
+
+
+#join with comp_data
+full_Data <- left_join(comp_data, selected_CH4, by = "Date")
+
+```
+
+
+```{r}
+#Select the columns needed
+ready_data <- full_Data |> 
+  select(Date, daily_CH4, DOsat_5m, DOsat_9m, sch_stab, 
+         WindSpeed_Average_m_s, CH4_1.6m, 
+         CH4_5m, CH4_9m, temp_9m, temp_5m, DOsat_surface, temp_1.6m, 
+         mean_Chla, mean_fDOM) 
+
+#rename some variables for simplicity
+epi_hyp_data <- ready_data |> 
+  rename(DOsat_1.6m = "DOsat_surface",
+         Wind = "WindSpeed_Average_m_s")
+
+
+```
+
+
+We interpolate dissolved methane data at each depths separately in the following chunk.
+
+```{r}
+# #interpolation
+# #reorder
+
+# USE arrange and desc
+Vol_Weighted_CH4_ordered <- Vol_Weighted_CH4 |> 
+  arrange(Date, Depth_m)
+
+# #dissolved methane
+sub_ghg_fluxes <- Vol_Weighted_CH4_ordered |> 
+  select(Date, VW_methane, Depth_m)
+
+# # Generate a sequence of daily dates
+days <- seq(min(sub_ghg_fluxes$Date), max(sub_ghg_fluxes$Date), by = "day")
+layers <- c(0.1,1.6,3.8,5,6.2,8,9)
+data <- expand.grid(Date = days, Depth_m = layers)  # Create a full grid
+#
+# #merge
+CH4_int <- left_join(data, sub_ghg_fluxes, by=c("Date","Depth_m"))
+#
+GHG_int_final <- CH4_int |> 
+  group_by(Depth_m) |>   # Process each layer separately
+  mutate(CH4_int = na.approx(VW_methane, Date, rule = 2)) %>%  # Linear interpolation
+  ungroup() %>%
+  select(-VW_methane)
+
+#Pivot wider and join with EddyFlux data
+selected_CH4_int <- GHG_int_final |> 
+  select(Date, Depth_m, CH4_int) |> 
+  pivot_wider(names_from = "Depth_m", values_from = "CH4_int") |> 
+  rename(iCH4_surface = "0.1",
+         iCH4_1.6m = "1.6",
+         iCH4_3.8m = "3.8",
+         iCH4_5m = "5",
+         iCH4_6.2m = "6.2",
+         iCH4_8m = "8",
+         iCH4_9m = "9") |> 
+  select(-iCH4_surface, -iCH4_3.8m, -iCH4_6.2m, -iCH4_8m)
+
+#join with full_data
+epi_hyp_int <- left_join(epi_hyp_data, selected_CH4_int, by = "Date")
+
+```
+
+
+Let's plot the discrete dissolved methane concentrations before and after interpolation to check they align with each other. 
+
+
+```{r}
+#ADD PLOT OF epi_hyp_int to confirm that it looks like you expect it to look
+gut_check <- epi_hyp_int |> 
+  select(Date, daily_CH4, CH4_1.6m, CH4_5m, CH4_9m,
+         iCH4_1.6m, iCH4_5m, iCH4_9m)
+
+# Select column pairs for comparison
+selected_pairs <- list(
+  c("CH4_1.6m", "iCH4_1.6m"),
+  c("CH4_5m", "iCH4_5m"),
+  c("CH4_9m", "iCH4_9m"),
+  c("daily_CH4", "daily_CH4")
+)
+
+# Define colors for the two variables in each pair
+colors <- c("blue", "red")
+
+# Define a smaller legend size
+legend_size <- 0.6
+
+# Create a 2x3 plotting layout
+par(mfrow = c(2, 3))  
+
+# Loop through each selected pair and plot them
+for (i in 1:length(selected_pairs)) {
+  vars <- selected_pairs[[i]]
+  
+  # Plot first variable
+  plot(gut_check$Date, gut_check[[vars[1]]], type = "p", col = colors[1], lwd = 2,
+       xlab = "", ylab = "Value", main = paste("Pair", i, ":", vars[1], "vs", vars[2]))
+  
+  # Add second variable using lines()
+  lines(gut_check$Date, gut_check[[vars[2]]], col = colors[2], lwd = 2)
+  
+  # Add a legend
+  legend("topright", legend = vars, col = colors, pch = 1, lty = 1, lwd = 2, cex = legend_size, bg=rgb(1, 1, 1, 0.5))
+}
+
+
+```
+
+
+#########################################################
+
+### Structural Equation Modeling
+
+#Resources:
+
+#https://bookdown.org/luguben/EFA_in_R/determining-the-number-of-factors-1.html
+
+#https://cran.r-project.org/web/packages/lavaanPlot/vignettes/Intro_to_lavaanPlot.html
+
+#https://people.ucsc.edu/~zurbrigg/psy214b/09SEM8a.pdf
+
+#Hu, L. T., & Bentler, P. M. (1999). Cutoff criteria for fit indexes in covariance structure analysis: Conventional criteria versus new alternatives. Structural equation modeling: a multidisciplinary journal, 6(1), 1-55.
+
+#Sathyanarayana, S., & Mohanasundaram, T. (2024). Fit indices in structural equation modeling and confirmatory factor analysis: reporting guidelines. Asian Journal of Economics, Business and Accounting, 24(7), 561-577.
+
+
+- First, we explored the relationships among various water quality variables and methane fluxes using a correlation plot. We did not include the independent variables strongly correlated with each other in the models to remove the effects of multicollinearity.
+
+
+```{r}
+#correlations
+cor_data <- epi_hyp_int |> 
+  select(-Date)
+
+cor_matrix <- cor(cor_data, use="pairwise.complete.obs")
+ggcorrplot(cor_matrix,
+           lab = TRUE, lab_size = 2, tl.cex = 8)
+
+```
+
+
+The correlogram showed that the daily methane flux was most negatively correlated with dissolved oxygen saturation at 5m depth and 9m depth among the variables used. Also, daily methane flux was most positively correlated with volume-weighted dissolved methane concentration at 5m, thermocline depth and blue-green algae concentrations. #We then used short-listed variables from correlation analysis to define path analysis models and tested them against the weekly data. 
+
+The model assumptions about univariate and multivariate normality was tested using shapiro-Wilk test and Mardia multivariate normality test.
+
+
+
+```{r}
+#Assessing assumptions about the distribution of measured variables
+#Select only the columns we want to model
+corr_data <- epi_hyp_int |> 
+  select(daily_CH4, DOsat_5m, DOsat_9m, 
+         sch_stab, Wind, iCH4_1.6m, 
+         iCH4_5m, iCH4_9m, temp_9m, temp_5m, 
+         DOsat_1.6m, temp_1.6m, mean_Chla, mean_fDOM,
+         DOsat_1.6m)
+
+#Test multivariate normality
+mvnout <- mardia(corr_data)
+mvnout$uv.shapiro #extract shapiro-Wilk univariate normality test statistics
+mvnout$mv.test #Mardia multivariate normality test
+
+```
+
+
+- Results from both the univariate and multivariate tests indicate that the most measures do not come from multivariate normal distributions. Thus, we'll use MLM as an estimator in the later SEM analysis.
+
+#Reference: https://www.regorz-statistik.de/blog/lavaan_normality.html
+
+
+```{r}
+#NORMALIZE THE DATASET
+data_scaled <- scale(corr_data)
+
+```
+
+
+### Individual path models and drivers selection
+
+The piecewise SEM produces no valid global covariance matrix unlike latent variable based SEM, alternative goodness-of-fit tests are necessary. The typical approach uses Shipley's test of directed separation. This procedure tests the assumption that all variables are conditionally independent. In simplest terms, conditional independence implies that there are no missing relationships among unconnected variables (Shipley 2000a).
+
+To compare standardized regression coefficients, we re-fit the model in lavaan package and assess the model fit using standardized test statistics (the ratio of chi-squared value to the degrees of freedom greater than 3), root mean squared error approximation (RMSEA) and standard root mean residual (SRMR) less than 0.1 and comparative fit index (CFI) grater than 0.9. 
+
+
+The regression coefficients represent the strength of the relationship between latent constructs/ independent variables and dependent variable(s). Since, the latent constructs are correlated, the regression coefficients are partial coefficients, interpreted as the amount of change in dependent/ exogenous variable given a unit change in independent/ latent variable, controlling for the effects of other variables in the model.
+
+
+
+```{r}
+#select variables of interest and include lags informed from cross-correlation plots
+data_flux <- epi_hyp_int |> 
+  select(DOsat_9m, temp_1.6m, temp_9m, temp_5m,
+         iCH4_5m, iCH4_1.6m, DOsat_5m,
+         sch_stab, DOsat_1.6m, daily_CH4, 
+         Wind, iCH4_9m, mean_Chla, mean_fDOM) |>
+  mutate(temp_1.6m_lag3 = lag(temp_1.6m, 3),
+         mean_fDOM_lag1 = lag(mean_fDOM, 1)) |> 
+  na.omit()
+
+#This is same dataset data_flux but with Date for later use
+data_flux_w_date <- epi_hyp_int |> 
+  select(Date, DOsat_9m, temp_1.6m, temp_9m, temp_5m,
+         iCH4_5m, iCH4_1.6m, DOsat_5m,
+         sch_stab, DOsat_1.6m, daily_CH4, 
+         Wind, iCH4_9m, mean_Chla, mean_fDOM) |>
+  mutate(temp_1.6m_lag3 = lag(temp_1.6m, 3),
+         mean_fDOM_lag1 = lag(mean_fDOM, 1)) |> 
+  na.omit()
+
+```
+
+
+```{r}
+#Check lags using cross-correlation function
+#Note: this is just for temp_5m and iCH4_5m but did the same for all variables of interest.
+
+ccf(data_flux$temp_5m, data_flux$iCH4_5m, lag.max = 5)
+
+```
+
+
+Diffusion model: In this concept, CH4 diffusion/ebullition from hypolimnion to the epilimnion and subsequent flux to the atmosphere was modeled. 
+
+```{r}
+#diffusion/ebullition pathways model
+#fit the path models
+model_flux <- psem(
+  lm(daily_CH4 ~ Wind + iCH4_5m + iCH4_1.6m + iCH4_9m, data_flux),
+  lm(iCH4_5m ~ iCH4_9m, data_flux)
+
+)
+
+summary(model_flux)
+
+
+####MODEL TESTING IN LAVAAN PACKAGE######
+#scale the dataset
+data_flux_scaled <- scale(data_flux)
+
+model_flux <- '
+
+  daily_CH4 ~ Wind + iCH4_5m + iCH4_1.6m + iCH4_9m
+  iCH4_5m ~ iCH4_9m
+
+
+'
+
+
+fit.mod <- sem(model_flux, data = data_flux_scaled, std.lv = TRUE, estimator = "MLM")
+#MODEL FIT (Ideally non-significant p-value OR the ratio of chisq.scaled:df.scaled less than 5)
+fitMeasures(fit.mod, c("chisq.scaled", "df.scaled", "pvalue.scaled"))
+#Check RMSEA to estimate the discrepancy between the model-based and observed correlation matrices which takes into account both chi-squared value and model parsimony.
+#We want RMSEA <= 0.1
+fitMeasures(fit.mod, c("rmsea.scaled", "rmsea.ci.lower.scaled", "rmsea.ci.upper.scaled", "rmsea.pvalue.scaled"))
+#Check CFI and SRMR
+#We want CFI >= 0.9 and SRMR <= 0.08
+fitMeasures(fit.mod, c("cfi.scaled", "srmr"))
+
+#visualize the path diagrams
+lavaanPlot(model = fit.mod, , graph_options = list(rankdir = "BT"), node_options=list(shape="box", fontname="Helvetica"), edge_options=list(color="grey"), coefs = TRUE, stand = TRUE, stars = c("regress", "latent"), digits=3, sig = TRUE)
+
+
+```
+
+
+Diffusion/ebullition ALTERNATIVE model: This is a slightly modified version of above model where we add a new data point (diffusion pathway from 5m to 1.6m), which destroys the model. This is why we did not include this pathway in the basic diffusion/ebullition model.
+
+```{r}
+#diffusion/ebullition pathways ALTERNATIVE model
+#fit the path models
+model_flux <- psem(
+  lm(daily_CH4 ~ Wind + iCH4_5m + iCH4_1.6m + iCH4_9m, data_flux),
+  lm(iCH4_1.6m ~ iCH4_5m, data_flux),
+  lm(iCH4_5m ~ iCH4_9m, data_flux)
+
+)
+
+summary(model_flux)
+
+
+####MODEL TESTING IN LAVAAN PACKAGE######
+#scale the dataset
+data_flux_scaled <- scale(data_flux)
+
+model_flux <- '
+
+  daily_CH4 ~ Wind + iCH4_5m + iCH4_1.6m + iCH4_9m
+  iCH4_1.6m ~ iCH4_5m
+  iCH4_5m ~ iCH4_9m
+
+
+'
+
+
+fit.mod <- sem(model_flux, data = data_flux_scaled, std.lv = TRUE, estimator = "MLM")
+#MODEL FIT (Ideally non-significant p-value OR the ratio of chisq.scaled:df.scaled less than 5)
+fitMeasures(fit.mod, c("chisq.scaled", "df.scaled", "pvalue.scaled"))
+#Check RMSEA to estimate the discrepancy between the model-based and observed correlation matrices which takes into account both chi-squared value and model parsimony.
+#We want RMSEA <= 0.1
+fitMeasures(fit.mod, c("rmsea.scaled", "rmsea.ci.lower.scaled", "rmsea.ci.upper.scaled", "rmsea.pvalue.scaled"))
+#Check CFI and SRMR
+#We want CFI >= 0.9 and SRMR <= 0.08
+fitMeasures(fit.mod, c("cfi.scaled", "srmr"))
+
+#visualize the path diagrams
+lavaanPlot(model = fit.mod, , graph_options = list(rankdir = "BT"), node_options=list(shape="box", fontname="Helvetica"), edge_options=list(color="grey"), coefs = TRUE, stand = TRUE, stars = c("regress", "latent"), digits=3, sig = TRUE)
+
+
+```
+
+
+
+
+Diffusion/Ebullition with physiological drivers model: In this concept, physiological drivers were added to the diffusion/ebullition model.
+
+
+```{r}
+#Diffusion/Ebullition with Physiological drivers
+#fit the path models
+model_flux <- psem(
+  lm(daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab, data_flux),
+  lm(iCH4_5m ~ DOsat_5m + temp_5m + iCH4_9m + sch_stab, data_flux)
+
+)
+
+summary(model_flux)
+
+
+####MODEL TESTING IN LAVAAN PACKAGE######
+#scale the dataset
+data_flux_scaled <- scale(data_flux)
+
+model_flux <- '
+
+  daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab
+  iCH4_5m ~ DOsat_5m + temp_5m + iCH4_9m + sch_stab
+
+
+'
+
+
+fit.mod <- sem(model_flux, data = data_flux_scaled, std.lv = TRUE, estimator = "MLM")
+#MODEL FIT (Ideally non-significant p-value OR the ratio of chisq.scaled:df.scaled less than 5)
+fitMeasures(fit.mod, c("chisq.scaled", "df.scaled", "pvalue.scaled"))
+#Check RMSEA to estimate the discrepancy between the model-based and observed correlation matrices which takes into account both chi-squared value and model parsimony.
+#We want RMSEA <= 0.1
+fitMeasures(fit.mod, c("rmsea.scaled", "rmsea.ci.lower.scaled", "rmsea.ci.upper.scaled", "rmsea.pvalue.scaled"))
+#Check CFI and SRMR
+#We want CFI >= 0.9 and SRMR <= 0.08
+fitMeasures(fit.mod, c("cfi.scaled", "srmr"))
+
+#visualize the path diagrams
+lavaanPlot(model = fit.mod, , graph_options = list(rankdir = "BT"), node_options=list(shape="box", fontname="Helvetica"), edge_options=list(color="grey"), coefs = TRUE, stand = TRUE, stars = c("regress", "latent"), digits=3, sig = TRUE)
+
+
+```
+
+
+Diffusion/Ebullition with physiological and biological drivers model: In this concept, physiological and biological drivers were added to the diffusion/ebullition model.
+
+
+```{r}
+#Diffusion/Ebullition with Physiological and Biological drivers
+#fit the path models
+model_flux <- psem(
+  lm(daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab + mean_Chla, data_flux),
+  lm(iCH4_5m ~ DOsat_5m + temp_5m + mean_fDOM_lag1 + iCH4_9m + sch_stab, data_flux)
+
+)
+
+summary(model_flux)
+
+
+####MODEL TESTING IN LAVAAN PACKAGE######
+#scale the dataset
+data_flux_scaled <- scale(data_flux)
+
+model_flux <- '
+
+  daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab + mean_Chla
+  iCH4_5m ~ DOsat_5m + temp_5m + mean_fDOM_lag1 + iCH4_9m + sch_stab
+
+
+'
+
+
+fit.mod <- sem(model_flux, data = data_flux_scaled, std.lv = TRUE, estimator = "MLM")
+#MODEL FIT (Ideally non-significant p-value OR the ratio of chisq.scaled:df.scaled less than 5)
+fitMeasures(fit.mod, c("chisq.scaled", "df.scaled", "pvalue.scaled"))
+#Check RMSEA to estimate the discrepancy between the model-based and observed correlation matrices which takes into account both chi-squared value and model parsimony.
+#We want RMSEA <= 0.1
+fitMeasures(fit.mod, c("rmsea.scaled", "rmsea.ci.lower.scaled", "rmsea.ci.upper.scaled", "rmsea.pvalue.scaled"))
+#Check CFI and SRMR
+#We want CFI >= 0.9 and SRMR <= 0.08
+fitMeasures(fit.mod, c("cfi.scaled", "srmr"))
+
+#visualize the path diagrams
+lavaanPlot(model = fit.mod, , graph_options = list(rankdir = "BT"), node_options=list(shape="box", fontname="Helvetica"), edge_options=list(color="grey"), coefs = TRUE, stand = TRUE, stars = c("regress", "latent"), digits=3, sig = TRUE)
+
+```
+
+
+```{r}
+#Statistical test
+## Compare early summer (Apr-July) and late summer (Aug - Nov) fluxes
+
+seasonal_flux <- data_flux_w_date |> 
+  select(Date,daily_CH4) |> 
+  mutate(Year = year(Date), 
+         Month = month(Date)) |> 
+  mutate(Season = ifelse(Month == 4 | Month == 5 | Month == 6 | Month == 7, "Early","Late"))
+
+#Difference in fluxes among years 
+seasonal_diff <- seasonal_flux |> 
+  ungroup() |>
+  select(Year, daily_CH4) |> 
+  group_by(Year) |> 
+  summarise_all(median,na.rm=TRUE)
+
+
+# Pairwise Wilcoxon test among years
+pairwise.wilcox.test(seasonal_flux$daily_CH4, seasonal_flux$Year, p.adjust.method = "BH")
+
+
+#Mean by seasons and years
+seasonal_agg <- seasonal_flux |> 
+  ungroup() |> 
+  group_by(Year, Season) |>  
+  dplyr::summarise(CH4_mean = mean(daily_CH4, na.rm = TRUE),
+                   CH4_sd = sd(daily_CH4, na.rm = TRUE))
+
+
+#Test for seasonal difference overall
+wilcox.test(daily_CH4 ~ Season, data = seasonal_flux)
+
+#Seasonal difference within each year
+seasonal_flux %>%
+  group_by(Year) %>%
+  summarise(p_value = wilcox.test(daily_CH4 ~ Season)$p.value)
+
+
+#plots
+# Yearly comparison
+ggplot(seasonal_flux, aes(x = factor(Year), y = daily_CH4)) +
+  geom_boxplot() +
+  labs(x = "Year", y = "CH4 Flux", title = "CH4 Flux by Year")
+
+# Seasonal comparison
+ggplot(seasonal_flux, aes(x = Season, y = daily_CH4)) +
+  geom_boxplot() +
+  labs(x = "Season", y = "CH4 Flux", title = "Early vs Late Season CH4 Flux")
+
+
+
+```
+
+```{r}
+#Interaction effect of DO and temp on fluxes
+seasonal_flux <- data_flux_w_date |>
+  select(Date, daily_CH4, DOsat_5m, temp_5m)
+
+#Linear model between flux and temperature/DOsat_5m
+m3 <- lm(daily_CH4 ~ DOsat_5m + temp_5m + DOsat_5m*temp_5m , seasonal_flux)
+summary(m3)
+
+```
+
+
+```{r}
+# Add Year, Month, Season, and DO class
+seasonal_flux <- data_flux_w_date |>
+  select(Date, daily_CH4, DOsat_9m) |>
+  mutate(
+    Year = year(Date),
+    Month = month(Date),
+    Season = ifelse(Month %in% 4:7, "Early", "Late"),
+    DO_Class = ifelse(DOsat_9m < 20, "Low_DO", "High_DO")
+  )
+
+# Summary median CH4 flux by Year, DO_Class, and Season
+flux_summary <- seasonal_flux |>
+  group_by(Year, Season, DO_Class) |>
+  summarise(median_flux = median(daily_CH4, na.rm = TRUE), .groups = "drop")
+
+# Wilcoxon test comparing years within each DO class
+# Pairwise comparison of years for Low_DO only
+low_DO_data <- filter(seasonal_flux, DO_Class == "Low_DO")
+pairwise_low <- pairwise.wilcox.test(low_DO_data$daily_CH4, low_DO_data$Year, p.adjust.method = "BH")
+
+# Pairwise comparison of years for High_DO only
+high_DO_data <- filter(seasonal_flux, DO_Class == "High_DO")
+pairwise_high <- pairwise.wilcox.test(high_DO_data$daily_CH4, high_DO_data$Year, p.adjust.method = "BH")
+
+# Seasonal test within DO groups
+pairwise_season_low <- pairwise.wilcox.test(low_DO_data$daily_CH4, low_DO_data$Season, p.adjust.method = "BH")
+pairwise_season_high <- pairwise.wilcox.test(high_DO_data$daily_CH4, high_DO_data$Season, p.adjust.method = "BH")
+
+
+m2 <- lm(daily_CH4 ~ Season + DO_Class + Season*DO_Class, seasonal_flux)
+summary(m2)
+
+# Yearly comparison
+ggplot(seasonal_flux, aes(x = factor(Year), y = DOsat_9m)) +
+  geom_boxplot() +
+  geom_point() +
+  labs(x = "Year", y = "DOsat_9m", title = "DOsat by Year")
+
+```
+
+```{r}
+#select variables 
+seasonal_flux <- data_flux_w_date |>
+  select(Date, DOsat_5m, DOsat_9m) |> 
+  mutate(Year = year(Date))
+
+# Convert to long format
+seasonal_flux_long <- seasonal_flux |> 
+  pivot_longer(cols = c(DOsat_5m, DOsat_9m), 
+               names_to = "Depth", 
+               values_to = "DOsat")
+
+# Faceted panel plot
+ggplot(seasonal_flux_long, aes(x = factor(Year), y = DOsat)) +
+  geom_boxplot(fill = "skyblue") +
+  geom_jitter(width = 0.2, alpha = 0.3, color = "black") +
+  facet_wrap(~ Depth, nrow = 1, scales = "free_y") +
+  labs(x = "Year", y = "DO Saturation", title = "Yearly DO Saturation at 5m and 9m") +
+  theme_bw() +
+  theme(strip.text = element_text(size = 12, face = "bold"))
+
+# Pairwise Wilcoxon test among years
+pairwise.wilcox.test(seasonal_flux$DOsat_5m, seasonal_flux$Year, p.adjust.method = "BH")
+
+
+
+```
+
+
