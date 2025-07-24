@@ -348,7 +348,8 @@ comp_data$date <- as.Date(comp_data$date, format = "%Y-%m-%d")
 
 
 #write the dataset to csv
-write.csv(comp_data,"C:/Users/13188/Desktop/Data_repository/comp_data.csv")
+# Added an argument so you wouldn't have the first column of numbers when you read in the data frame. 
+write.csv(comp_data,"C:/Users/13188/Desktop/Data_repository/comp_data.csv", row.names = F)
 
 
 
