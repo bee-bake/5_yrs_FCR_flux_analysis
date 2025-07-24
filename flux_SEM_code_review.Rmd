@@ -8,9 +8,12 @@ output: html_document
 
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 #Load libraries
-pacman::p_load(DiagrammeRsvg, rsvg, mvnormalTest, lavaan, lavaanPlot, dplyr, readr, tidyr, lubridate, ggcorrplot, purrr, broom, leaps, piecewiseSEM, gridExtra, htmltools, zoo, tidyverse)
+pacman::p_load(knitr, DiagrammeRsvg, rsvg, mvnormalTest, lavaan, lavaanPlot, dplyr, readr, tidyr, lubridate, ggcorrplot, purrr, broom, leaps, piecewiseSEM, gridExtra, htmltools, zoo, tidyverse)
+
+#settings 
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = TRUE)
+
 
 ```
 
@@ -34,7 +37,10 @@ ghg_FCR <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/551/9/98f19e
          DateTime = date(DateTime)) |>  
   filter(Reservoir == "FCR", Site == 50, DateTime >= "2020-01-01")
 
-#create a hypsometric table with depth and volume (Hounshell et al. 2022)
+#create a hypsometric table with depth and volume (Hounshell et al. 2020, SI2 and SI3) I need some more explanation on how the depths were chosen in the Hounshell et al. 2020 table and how they calculated the volumes for each layer. If you use Hounshell et al table then I think the sample right below the surface should just use the total volume and not split it as you have. Realistically what depths should make up a layer?
+
+# Have you looked at the FCR baythmetry data package which has volumes for many different layers. 
+# Looking at these volumes in the table
 summarized_volumes <- tibble(
   Depth_m = c(0.1, 1.6, 3.8, 5, 6.2, 8, 9),
   Volume_L = c(125594861, 101405139, 59900000, 40200000, 13900000, 14100000, 1950000)) #adapted from SI (Hounshell et al. 2020) & bathy_FCR
