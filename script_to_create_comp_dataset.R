@@ -49,6 +49,7 @@ met_daily <- met_30 |>
 
 #EC fluxes
 #Load in EC data
+# Can't load this file because it is on your local drive. Put it in the repo. 
 ec <- read_csv("C:/Users/13188/Desktop/Reservoirs/Data/DataNotYetUploadedToEDI/EddyFlux_Processing/Eddy_fcr_footprint_full.csv") 
 
 ec2 <- ec |> 
@@ -115,7 +116,7 @@ ghg_fluxes_FCR <- ghg_EDI |>
   select(date,Rep,CH4_umolL,CO2_umolL, Depth_m) |> 
   summarize(mean_CH4 = mean(CH4_umolL, na.rm = TRUE),
             mean_CO2 = mean(CO2_umolL, na.rm = TRUE),
-            .by = c("DateTime", "Depth_m"))
+            .by = c("date", "Depth_m"))
 
 
 ############
