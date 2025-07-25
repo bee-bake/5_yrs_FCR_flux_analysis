@@ -3,6 +3,7 @@
 
 #Load libraries
 # Load in libraries
+# Why so many packages when you don't use most of them? I would clean this up. 
 pacman::p_load(tidyverse,ncdf4,ggplot2,ggpubr,LakeMetabolizer,zoo,scales,lubridate,
                lognorm,MuMIn,rsq,Metrics,astsa,DescTools,kSamples,rLakeAnalyzer)
 
@@ -39,6 +40,7 @@ met_30 <- met_all |>
   group_by(Breaks) |> 
   summarise_all(mean,na.rm=TRUE)
 
+# average to the daily time step
 met_daily <- met_30 |> 
   mutate(date=as.Date(DateTime)) |> 
   group_by(date) |> 
@@ -49,6 +51,7 @@ met_daily <- met_30 |>
 
 #EC fluxes
 #Load in EC data
+# Can't load this file because it is on your local drive. Put it in the repo. What about reading from EDI? 
 ec <- read_csv("C:/Users/13188/Desktop/Reservoirs/Data/DataNotYetUploadedToEDI/EddyFlux_Processing/Eddy_fcr_footprint_full.csv") 
 
 ec2 <- ec |> 
@@ -115,14 +118,15 @@ ghg_fluxes_FCR <- ghg_EDI |>
   select(date,Rep,CH4_umolL,CO2_umolL, Depth_m) |> 
   summarize(mean_CH4 = mean(CH4_umolL, na.rm = TRUE),
             mean_CO2 = mean(CO2_umolL, na.rm = TRUE),
-            .by = c("DateTime", "Depth_m"))
+            .by = c("date", "Depth_m"))
 
 
 ############
 #Load in Catwalk data
-catwalk_edi <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/271/9/f23d27b67f71c25cb8e6232af739f986") |>
+catwalk_edi <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/271/9/f23d27b67f71c25cb8e6232af739f986")|> 
+# takes out all midnight observations
   mutate(DateTime = as.POSIXct(strptime(DateTime, "%Y-%m-%d %H:%M:%S", tz="EST"))) |> 
-  filter(DateTime >= "2020-05-01" & DateTime <= "2024-12-31")
+  filter(DateTime >= "2020-05-01")
 
 # catwalk_2024 <- read_csv("https://raw.githubusercontent.com/FLARE-forecast/FCRE-data/fcre-catwalk-data-qaqc/fcre-waterquality_L1.csv") %>%
 #   filter(DateTime >= "2024-01-01 00:00:00") %>%
@@ -133,7 +137,7 @@ catwalk_edi <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/271/9/f2
 
 # Calculate average half-hourly values
 # Select data every 30 minutes from Jan 2020 to end of met data
-catwalk_edi$Breaks <- cut(catwalk_edi$DateTime,breaks = "30 mins",right=FALSE)
+catwalk_edi$Breaks <- as.character(cut(catwalk_edi$DateTime,breaks = "30 mins",right=FALSE))
 catwalk_edi$Breaks <- ymd_hms(as.character(catwalk_edi$Breaks))
 
 # Average to half-hourly catwalk measurements
@@ -143,6 +147,7 @@ catwalk_30 <- catwalk_edi |>
   group_by(Breaks) |>
   summarise_all(mean,na.rm=TRUE)
 
+# What are these steps for? 
 catwalk_30 <- catwalk_30 |> 
   select(Breaks,RDO_mgL_5_adjusted, RDO_mgL_9_adjusted, EXODO_mgL_1, ThermistorTemp_C_1,
          ThermistorTemp_C_5, ThermistorTemp_C_9, EXOfDOM_QSU_1, EXOChla_ugL_1, EXOTemp_C_1) |> 
@@ -158,6 +163,8 @@ water_temp_9m <- catwalk_edi |>
          ThermistorTemp_C_8, ThermistorTemp_C_9, EXOfDOM_QSU_1, EXOChla_ugL_1, EXODOsat_percent_1, RDOsat_percent_5_adjusted, RDOsat_percent_9_adjusted) |>
   na.omit() |>
   group_by(date) |>
+  # why include all these different depths if you don't actually put them in the data frame you are making?
+  # one way to make this cleaner is to use https://dplyr.tidyverse.org/reference/across.html. You can even give it a vecotr of values to summarise. 
   summarise(temp_surface = mean(ThermistorTemp_C_surface),
             d1 = mean(ThermistorTemp_C_1),
             d2 = mean(ThermistorTemp_C_2),
@@ -167,7 +174,7 @@ water_temp_9m <- catwalk_edi |>
             d6 = mean(ThermistorTemp_C_6),
             d7 = mean(ThermistorTemp_C_7),
             d8 = mean(ThermistorTemp_C_8),
-            temp_1.6m = (d1 + d2)/2, #mean of temp at 1m and 2m
+            temp_1.6m = (d1 + d2)/2, #mean of temp at 1m and 2m # why not use EXO temp? which is at 1.6m?
             temp_9m = mean(ThermistorTemp_C_9),
             DOsat_surface = mean(EXODOsat_percent_1),
             DOsat_5m = mean(RDOsat_percent_5_adjusted),
@@ -179,7 +186,7 @@ water_temp_9m <- catwalk_edi |>
 
 #############
 #PREPARE thermocline depth and buoyancy dataset
-# Format catwalk temp data for use in LakeAnalyzer in Matlab
+# Format catwalk temp data for use in LakeAnalyzer in Matlab. 
 catwalk_temp <- catwalk_edi |> 
   select(DateTime,ThermistorTemp_C_surface, ThermistorTemp_C_1, ThermistorTemp_C_2, ThermistorTemp_C_3,
          ThermistorTemp_C_4, ThermistorTemp_C_5, ThermistorTemp_C_6, ThermistorTemp_C_7, ThermistorTemp_C_8,
@@ -187,23 +194,29 @@ catwalk_temp <- catwalk_edi |>
   group_by(by30 = cut(DateTime, "30 min")) |> 
   summarise_all(mean,na.rm=TRUE) |>
   select(-DateTime) |>
-  rename(dateTime = by30, wtr_0.1 = ThermistorTemp_C_surface, wtr_1.0 = ThermistorTemp_C_1, 
+  rename(datetime = by30, wtr_0.1 = ThermistorTemp_C_surface, wtr_1.0 = ThermistorTemp_C_1, 
          wtr_2.0 = ThermistorTemp_C_2, wtr_3.0 = ThermistorTemp_C_3, wtr_4.0 = ThermistorTemp_C_4,
          wtr_5.0 = ThermistorTemp_C_5, wtr_6.0 = ThermistorTemp_C_6, wtr_7.0 = ThermistorTemp_C_7,
          wtr_8.0 = ThermistorTemp_C_8, wtr_9.0 = ThermistorTemp_C_9)
 
-catwalk_temp$dateTime <- ymd_hms(catwalk_temp$dateTime)
+# losing all the midnight observations because of failed parses
+#catwalk_temp$dateTime <- ymd_hms(catwalk_temp$dateTime)
 
-catwalk_temp = data.frame(catwalk_temp)
+# Use this instead because it does dates with time and then just ymd for midnight
+catwalk_temp$datetime <- lubridate::parse_date_time(catwalk_temp$datetime, orders = c('ymd HMS','ymd'))
 
-# Export out for LakeAnalyzer
-write.table(catwalk_temp, "C:/Users/13188/Desktop/Data_repository/fcr.wtr", sep='\t', row.names=FALSE)
+fcr_temp = data.frame(catwalk_temp)
 
-## Load in data for Lake Analyzer - move path to rLakeAnalyzer folder
-#wtr.path = system.file('extdata', 'fcr.wtr', package="rLakeAnalyzer")
-fcr_temp = load.ts("C:/Users/13188/Desktop/Data_repository/fcr.wtr")
+# It is not necessary to save the file and reload it. You can just use the file you made above
+# # Export out for LakeAnalyzer
+# write.table(catwalk_temp, "C:/Users/13188/Desktop/Data_repository/fcr.wtr", sep='\t', row.names=FALSE)
+# 
+# ## Load in data for Lake Analyzer - move path to rLakeAnalyzer folder
+# #wtr.path = system.file('extdata', 'fcr.wtr', package="rLakeAnalyzer")
+# fcr_temp = load.ts("C:/Users/13188/Desktop/Data_repository/fcr.wtr")
 
-thermo_depth = ts.thermo.depth(fcr_temp,seasonal=TRUE)
+# Find the depth of the thermocline
+thermo_depth =rLakeAnalyzer::ts.thermo.depth(fcr_temp,seasonal=TRUE)  
 
 # Replace NaNs with NA
 thermo_depth <- thermo_depth |>
@@ -215,7 +228,7 @@ ggplot(thermo_depth,mapping=aes(x=datetime,y=-thermo.depth)) +
   xlim(as.POSIXct("2020-04-01"), as.POSIXct("2024-12-31"))
 
 ## Calculate N2
-n2_freq <- ts.buoyancy.freq(fcr_temp,seasonal=TRUE)
+n2_freq <-rLakeAnalyzer::ts.buoyancy.freq(fcr_temp,seasonal=TRUE)
 
 # Remove NA rows in the key column before joining
 n2_freq <- n2_freq |> filter(!is.na(datetime))
@@ -228,24 +241,32 @@ ggplot()+
 # Create sample bathymetric data
 date = seq(as.POSIXct("2020-05-01 00:10:00"), as.POSIXct("2024-12-31 23:59:00"), by = "30 mins")
 
-bathy <- data.frame(
-  depths = c(0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0),
-  areas = c(46101,46101,18700,17201,17200,6900,7292,7291,7290)  # Areas for each depth adapted from Hounshell et al. 2020
-)
-# Export out for LakeAnalyzer
-write.table(bathy, "C:/Users/13188/Desktop/Data_repository/bathy.wtr", sep='\t', row.names=FALSE)
+# Use the bathymetry data on EDI for this. You will also need to cite it. 
+fcr_bathy <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/1254/1/f7fa2a06e1229ee75ea39eb586577184")|>
+  filter(Reservoir =="FCR")|>
+  dplyr::rename("areas"= SA_m2,
+                "depths" = Depth_m)|>
+  select(depths, areas)
 
-## Load in data for Lake Analyzer - move path to rLakeAnalyzer folder
-#wtr.path = system.file('extdata', 'fcr.wtr', package="rLakeAnalyzer")
-fcr_bathy = load.bathy("C:/Users/13188/Desktop/Data_repository/bathy.wtr")
+# bathy <- data.frame(
+#   depths = c(0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0),
+#   areas = c(46101,46101,18700,17201,17200,6900,7292,7291,7290)  # Areas for each depth adapted from Hounshell et al. 2020 # not sure where these numbers are from and why they are so different from what is on EDI
+# )
+# # Export out for LakeAnalyzer
+# write.table(bathy, "C:/Users/13188/Desktop/Data_repository/bathy.wtr", sep='\t', row.names=FALSE)
+# 
+# ## Load in data for Lake Analyzer - move path to rLakeAnalyzer folder
+# #wtr.path = system.file('extdata', 'fcr.wtr', package="rLakeAnalyzer")
+# fcr_bathy = load.bathy("C:/Users/13188/Desktop/Data_repository/bathy.wtr")
 
 
 #bathy <- bathy[bathy_wide$datetime %in% fcr_temp$datetime, ]
-sch_stab <- ts.schmidt.stability(fcr_temp,fcr_bathy, na.rm = TRUE)
+sch_stab <- rLakeAnalyzer::ts.schmidt.stability(fcr_temp,fcr_bathy, na.rm = TRUE)
 
 # Remove NA rows in the key column before joining
 sch_stab <- sch_stab |> filter(!is.na(datetime))
 
+# Join data frames together by datetime
 fcr_results_la <- full_join(thermo_depth,n2_freq,by="datetime")
 fcr_results_la_sch_stab <- full_join(fcr_results_la,sch_stab,by="datetime")
 
@@ -261,27 +282,29 @@ fcr_results_la_sch_stab <- fcr_results_la_sch_stab |>
 
 #plot
 plot <- ggplot()+
-  geom_line(data = fcr_results_la_sch_stab,aes(x=doy,y=mean_thermodepth,color=as.factor(Year)),size=1)
+  geom_line(data = fcr_results_la_sch_stab,aes(x=doy,y=mean_thermodepth,color=as.factor(Year)),linewidth=1)
 plot+scale_y_reverse()
 
-write.csv(fcr_results_la_sch_stab,"C:/Users/13188/Desktop/Data_repository/FCR_results_LA.csv")
+#write.csv(fcr_results_la_sch_stab,"C:/Users/13188/Desktop/Data_repository/FCR_results_LA.csv")
 
 #############
 # Load in buoyancy frequency: currently daily; will need to update if we want to include for hourly!
-la <- read_csv("C:/Users/13188/Desktop/Data_repository/FCR_results_LA.csv")
+#la <- read_csv("C:/Users/13188/Desktop/Data_repository/FCR_results_LA.csv")
 
-la_daily <- la |>
+la_daily <- fcr_results_la_sch_stab |>
   group_by(Year, doy) |>
   summarise(thermo.depth = mean(mean_thermodepth,na.rm=TRUE),
             n2 = mean(mean_buo,na.rm=TRUE),
             sch_stab = mean(mean_sch,na.rm=TRUE))
 
+# get the date from day of year
 la_daily$date <- as.Date(la_daily$doy - 1, origin = paste0(la_daily$Year, "-01-01"))
 
 
 ####################
 #PREPARE HYPOLIMNETIC OXYGEN ADDED DATASET
 #O2 data (needs update for 2024)
+# Need access to this data set. 
 FCR_O2 <- read_csv("C:/Users/13188/Desktop/Data_repository/O2_data_FCR.csv")
 
 #Change date format
@@ -325,7 +348,8 @@ comp_data$date <- as.Date(comp_data$date, format = "%Y-%m-%d")
 
 
 #write the dataset to csv
-write.csv(comp_data,"C:/Users/13188/Desktop/Data_repository/comp_data.csv")
+# Added an argument so you wouldn't have the first column of numbers when you read in the data frame. 
+write.csv(comp_data,"C:/Users/13188/Desktop/Data_repository/comp_data.csv", row.names = F)
 
 
 

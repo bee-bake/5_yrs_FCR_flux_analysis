@@ -8,9 +8,12 @@ output: html_document
 
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 #Load libraries
-pacman::p_load(DiagrammeRsvg, rsvg, mvnormalTest, lavaan, lavaanPlot, dplyr, readr, tidyr, lubridate, ggcorrplot, purrr, broom, leaps, piecewiseSEM, gridExtra, htmltools, zoo, tidyverse)
+pacman::p_load(knitr, DiagrammeRsvg, rsvg, mvnormalTest, lavaan, lavaanPlot, dplyr, readr, tidyr, lubridate, ggcorrplot, purrr, broom, leaps, piecewiseSEM, gridExtra, htmltools, zoo, tidyverse)
+
+#settings 
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = TRUE)
+
 
 ```
 
@@ -34,7 +37,10 @@ ghg_FCR <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/551/9/98f19e
          DateTime = date(DateTime)) |>  
   filter(Reservoir == "FCR", Site == 50, DateTime >= "2020-01-01")
 
-#create a hypsometric table with depth and volume (Hounshell et al. 2022)
+#create a hypsometric table with depth and volume (Hounshell et al. 2020, SI2 and SI3) I need some more explanation on how the depths were chosen in the Hounshell et al. 2020 table and how they calculated the volumes for each layer. If you use Hounshell et al table then I think the sample right below the surface should just use the total volume and not split it as you have. Realistically what depths should make up a layer?
+
+# Have you looked at the FCR baythmetry data package which has volumes for many different layers. 
+# Looking at these volumes in the table
 summarized_volumes <- tibble(
   Depth_m = c(0.1, 1.6, 3.8, 5, 6.2, 8, 9),
   Volume_L = c(125594861, 101405139, 59900000, 40200000, 13900000, 14100000, 1950000)) #adapted from SI (Hounshell et al. 2020) & bathy_FCR
@@ -74,13 +80,14 @@ sub_ghg_conc <- ghg_conc_summer |>
 Vol_Weighted_CH4 <- left_join(sub_ghg_conc, summarized_volumes, by = "Depth_m") 
 
 
-#Calculate volume-weighted dissolved methane conc
+#Calculate volume-weighted dissolved methane concentration. Can you put units on this?
 Vol_Weighted_CH4 <- Vol_Weighted_CH4 |> 
   mutate(VW_methane = (mean_CH4*Volume_L)/1000000)
 
 #Pivot wider and join with EddyFlux data
 selected_CH4 <- Vol_Weighted_CH4 |> 
   select(Date, Depth_m, VW_methane) |> 
+  filter(Depth_m != 6.0)|> #take out the 2 measurements at 6m in the data frame
   pivot_wider(names_from = Depth_m, values_from = VW_methane, values_fill = NA) |> 
   rename(CH4_surface = "0.1",
          CH4_1.6m = "1.6",
@@ -315,6 +322,8 @@ data_flux_w_date <- epi_hyp_int |>
 
 ccf(data_flux$temp_5m, data_flux$iCH4_5m, lag.max = 5)
 
+# What does this plot tell you? Why did you check lags?
+
 ```
 
 
@@ -410,11 +419,11 @@ lavaanPlot(model = fit.mod, , graph_options = list(rankdir = "BT"), node_options
 
 
 
-Diffusion/Ebullition with physiological drivers model: In this concept, physiological drivers were added to the diffusion/ebullition model.
+Diffusion/Ebullition with physical drivers model: In this concept, physical drivers were added to the diffusion/ebullition model.
 
 
 ```{r}
-#Diffusion/Ebullition with Physiological drivers
+#Diffusion/Ebullition with physical drivers
 #fit the path models
 model_flux <- psem(
   lm(daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab, data_flux),
@@ -455,11 +464,11 @@ lavaanPlot(model = fit.mod, , graph_options = list(rankdir = "BT"), node_options
 ```
 
 
-Diffusion/Ebullition with physiological and biological drivers model: In this concept, physiological and biological drivers were added to the diffusion/ebullition model.
+Diffusion/Ebullition with physical and biological drivers model: In this concept, physical and biological drivers were added to the diffusion/ebullition model.
 
 
 ```{r}
-#Diffusion/Ebullition with Physiological and Biological drivers
+#Diffusion/Ebullition with physical and Biological drivers
 #fit the path models
 model_flux <- psem(
   lm(daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab + mean_Chla, data_flux),
@@ -566,6 +575,7 @@ summary(m3)
 
 
 ```{r}
+# Add a description of what you are doing here and why
 # Add Year, Month, Season, and DO class
 seasonal_flux <- data_flux_w_date |>
   select(Date, daily_CH4, DOsat_9m) |>
@@ -629,6 +639,11 @@ ggplot(seasonal_flux_long, aes(x = factor(Year), y = DOsat)) +
 
 # Pairwise Wilcoxon test among years
 pairwise.wilcox.test(seasonal_flux$DOsat_5m, seasonal_flux$Year, p.adjust.method = "BH")
+
+# Can you denote which years the oxygenation system was on. Maybe different fill colors in the box?
+# Are you go to denote significance in the plots? 
+
+
 
 
 
