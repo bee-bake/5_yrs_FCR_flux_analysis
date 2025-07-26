@@ -7,23 +7,22 @@ output: html_document
 ---
 
 
-```{r setup, include=FALSE}
+```{r, include=FALSE}
+
 #Load libraries
 pacman::p_load(knitr, DiagrammeRsvg, rsvg, mvnormalTest, lavaan, lavaanPlot, dplyr, readr, tidyr, lubridate, ggcorrplot, purrr, broom, leaps, piecewiseSEM, gridExtra, htmltools, zoo, tidyverse)
-
-#settings 
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = TRUE)
 
 
 ```
 
 
 ```{r}
-#Load up the data with methane flux (comp_data.csv created using script_to_create_comp_dataset.R) and associated driver variables
+#This chunk of code will load up the dataset with methane flux and associated driver variables from comp_data.csv created using script_to_create_comp_dataset.R
+
 #This will pull the methane flux daily data which only pass minimum half hourly test of >=20
-comp_data <- read_csv("https://raw.github.com/bee-bake/EddyFlux_data/main/comp_data.csv", show_col_types = FALSE) |> 
-  select(-...1) |>   # Removes the unnecessary first column 
+comp_data <- read_csv("https://raw.github.com/bee-bake/5_yrs_FCR_flux_analysis/main/comp_data.csv", show_col_types = FALSE) |> 
   mutate(Date = date)
+
 ```
 
 
@@ -37,13 +36,15 @@ ghg_FCR <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/551/9/98f19e
          DateTime = date(DateTime)) |>  
   filter(Reservoir == "FCR", Site == 50, DateTime >= "2020-01-01")
 
-#create a hypsometric table with depth and volume (Hounshell et al. 2020, SI2 and SI3) I need some more explanation on how the depths were chosen in the Hounshell et al. 2020 table and how they calculated the volumes for each layer. If you use Hounshell et al table then I think the sample right below the surface should just use the total volume and not split it as you have. Realistically what depths should make up a layer?
+#Extract the volume of the depth of our interest from EDI to estimate volume-weighted methane in the following chunks
+#Get bathymetry data from EDI
+ghg_FCR_EDI <- read_csv("https://pasta.lternet.edu/package/data/eml/edi/1254/1/f7fa2a06e1229ee75ea39eb586577184")
 
-# Have you looked at the FCR baythmetry data package which has volumes for many different layers. 
-# Looking at these volumes in the table
 summarized_volumes <- tibble(
   Depth_m = c(0.1, 1.6, 3.8, 5, 6.2, 8, 9),
-  Volume_L = c(125594861, 101405139, 59900000, 40200000, 13900000, 14100000, 1950000)) #adapted from SI (Hounshell et al. 2020) & bathy_FCR
+  Volume_L = c(34590292.2, 22032551, 8265212, 4772921, 2697184, 515240, 9358))
+
+#Note: For 0.1m volume, first the average of 0m and 0.4m was taken which gives us the volume at 0.2m and then again average between volumes at 0m and 0.2m will give us that at 0.1m.
 
 ```
 
@@ -69,7 +70,7 @@ ghg_conc_summer <- ghg_conc |>
 
 
 ```{r}
-####ESTIMATE VOLUME WEIGHTED METHANE
+####This chunk will estimate the volume-weighted methane by multiplying the mean CH4 concentrations at each depth of interest and the respective volume of each depth in units of mol (umol/1000000)
 #dissolved methane 
 sub_ghg_conc <- ghg_conc_summer |> 
   mutate(Date = date(DateTime)) |> 
@@ -84,7 +85,7 @@ Vol_Weighted_CH4 <- left_join(sub_ghg_conc, summarized_volumes, by = "Depth_m")
 Vol_Weighted_CH4 <- Vol_Weighted_CH4 |> 
   mutate(VW_methane = (mean_CH4*Volume_L)/1000000)
 
-#Pivot wider and join with EddyFlux data
+#Pivot wider and join with comprehensive dataset
 selected_CH4 <- Vol_Weighted_CH4 |> 
   select(Date, Depth_m, VW_methane) |> 
   filter(Depth_m != 6.0)|> #take out the 2 measurements at 6m in the data frame
@@ -95,7 +96,7 @@ selected_CH4 <- Vol_Weighted_CH4 |>
          CH4_5m = "5",
          CH4_6.2m = "6.2",
          CH4_8m = "8",
-         CH4_9m = "9")
+         CH4_9m = "9") 
 
 
 #join with comp_data
@@ -318,11 +319,10 @@ data_flux_w_date <- epi_hyp_int |>
 
 ```{r}
 #Check lags using cross-correlation function
-#Note: this is just for temp_5m and iCH4_5m but did the same for all variables of interest.
+#Note: this is just for temp_1.6m and daily_CH4 but did the same for all variables of interest. A cross-correlation plot helps to understand how two time series are related over time, especially when the effect of one variable may be delayed or lagged relative to the other. A cross-correlation function (CCF) plot shows how strongly two time series are correlated as you shift one of them forward or backward in time.
 
-ccf(data_flux$temp_5m, data_flux$iCH4_5m, lag.max = 5)
+ccf(data_flux$temp_1.6m, data_flux$daily_CH4, lag.max = 5)
 
-# What does this plot tell you? Why did you check lags?
 
 ```
 
@@ -472,7 +472,7 @@ Diffusion/Ebullition with physical and biological drivers model: In this concept
 #fit the path models
 model_flux <- psem(
   lm(daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab + mean_Chla, data_flux),
-  lm(iCH4_5m ~ DOsat_5m + temp_5m + mean_fDOM_lag1 + iCH4_9m + sch_stab, data_flux)
+  lm(iCH4_5m ~ DOsat_5m + temp_5m + mean_fDOM + iCH4_9m + sch_stab, data_flux)
 
 )
 
@@ -486,7 +486,7 @@ data_flux_scaled <- scale(data_flux)
 model_flux <- '
 
   daily_CH4 ~ Wind + iCH4_5m + temp_1.6m_lag3 + iCH4_1.6m + iCH4_9m + sch_stab + mean_Chla
-  iCH4_5m ~ DOsat_5m + temp_5m + mean_fDOM_lag1 + iCH4_9m + sch_stab
+  iCH4_5m ~ DOsat_5m + temp_5m + mean_fDOM + iCH4_9m + sch_stab
 
 
 '
