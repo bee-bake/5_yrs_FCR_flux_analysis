@@ -1,12 +1,12 @@
 ---
 title: "FCR_Process_BD"
-author: "Brenda D'Achuna, Alex Hounshell, Adrienne Breef-Pilz"
+author: "Brenda D'Achuna, Alex Hounshell, Adrienne Breef-Pilz, Bibek Kandel"
 date: "`r Sys.Date()`"
 output: html_document
 ---
 
  This script: Following initial data corrections in Eddy Pro (using standard processing) 
- and light data cleaning via EddyPro_CleanUp.R
+ and light data cleaning via EddyPro_CleanUp.R. Note: This script is only a chunk of the full  script 'eddy-flux_processing_2020_2024.Rmd' (located in EDI) to create a non-gap filled flux  data for the purpose of the manuscript.
  
  Original code from Brenda D'Achuna, 21 May 2021
  Modified by Alex Hounshell on 21 May 2021
@@ -21,12 +21,7 @@ output: html_document
  4. Use de spike function to remove values
  
  5. Add Met values as needed
- 
- 6. Gaps fill. Beware this takes HOURS!!!!!
- 
- 7. Save files
- 
- 8. Plots for checks
+
  
 
 ```{r setup, include=FALSE}
